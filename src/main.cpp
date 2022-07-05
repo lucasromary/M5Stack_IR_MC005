@@ -2,13 +2,23 @@
 #include <WiFi.h>
 #include <M5Stack.h>
 
+bool is_IR = 1;
 int val_capteur = 0;
 int last_val_capteur = 0;
+bool send = 0;
+int counter = 0;
+
+bool is_reed = 1;
+int val_capteur_reed = 0;
+int last_val_capteur_reed = 0;
+bool send_reed = 0;
+int reed_state = 0;
+
 long timer_1 = 0;
 long timer_2 = 0;
 long timer_3 = 0;
-bool send = 0;
-int counter = 0;
+long timer_4 = 0;
+
 bool internet_state = 0;
 bool mqtt_state = 0;
 
@@ -24,11 +34,12 @@ extern "C"
 
 const char *mqtt_server = "mqtt.ci-ciad.utbm.fr";
 
-#define MQTT_HOST IPAddress(192,168,1,5)
+#define MQTT_HOST IPAddress(192, 168, 1, 5)
 #define MQTT_PORT 1883
 
 // a MODIFIER
 #define MQTT_TOPIC "M5Stack5/IR/state"
+#define MQTT_TOPIC_REED "M5Stack5/Reed/state"
 
 AsyncMqttClient mqttClient;
 TimerHandle_t mqttReconnectTimer;
@@ -87,6 +98,9 @@ void onMqttConnect(bool sessionPresent)
   M5.Lcd.drawString("MQTT : ", 0, 90, 4);
   M5.Lcd.drawString(String(mqtt_state), 200, 90, 4);
   M5.Lcd.drawString("Compteur : ", 0, 120, 4);
+  M5.Lcd.drawString(String(counter), 200, 120, 4);
+  M5.Lcd.drawString("reed state : ", 0, 150, 4);
+  M5.Lcd.drawString(String(val_capteur_reed), 300, 150, 4);
 }
 
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
@@ -100,7 +114,10 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
   M5.Lcd.drawString("MQTT : ", 0, 90, 4);
   M5.Lcd.drawString(String(mqtt_state), 200, 90, 4);
   M5.Lcd.drawString("Compteur : ", 0, 120, 4);
-  
+  M5.Lcd.drawString(String(counter), 200, 120, 4);
+  M5.Lcd.drawString("reed state : ", 0, 150, 4);
+  M5.Lcd.drawString(String(val_capteur_reed), 300, 150, 4);
+
   if (WiFi.isConnected())
   {
     xTimerStart(mqttReconnectTimer, 0);
@@ -162,10 +179,11 @@ void onMqttPublish(uint16_t packetId)
 
 void setup()
 {
-  M5.begin();       //Init M5Core.  初始化 M5Core
+  M5.begin();       // Init M5Core.  初始化 M5Core
   M5.Power.begin(); // Init power  初始化电源模块
   Serial.begin(115200);
   pinMode(22, INPUT_PULLUP);
+  pinMode(17, INPUT_PULLUP); // relay reed
 
   M5.Lcd.clear(BLACK);
   M5.Lcd.setTextDatum(CC_DATUM);
@@ -196,39 +214,40 @@ void setup()
   M5.Lcd.drawString("MQTT : ", 0, 90, 4);
   M5.Lcd.drawString(String(mqtt_state), 200, 90, 4);
   M5.Lcd.drawString("Compteur : ", 0, 120, 4);
-
+  M5.Lcd.drawString(String(counter), 200, 120, 4);
+  M5.Lcd.drawString("reed state : ", 0, 150, 4);
+  M5.Lcd.drawString(String(val_capteur_reed), 300, 150, 4);
 }
 
 void loop()
 {
-  val_capteur = digitalRead(22);
-  //Serial.println(val_capteur);
   timer_1 = millis();
 
-  if (val_capteur == 0 && last_val_capteur == 1 && timer_1 - timer_2 > 1000)
+  if (is_reed)
   {
-    timer_3 = millis();
-
-    while (millis() - timer_3 < 200)
+    val_capteur_reed = digitalRead(16);
+    /* capteur relay reed */
+    if (val_capteur_reed == 0 && last_val_capteur_reed == 1)
     {
-      val_capteur = digitalRead(22);
-      //Serial.println(val_capteur);
-      if (val_capteur == 1)
+      /*
+      timer_3 = millis();
+      while (millis() - timer_3 < 2000)
       {
-        send = 0;
+        val_capteur_reed = digitalRead(16);
+        if (val_capteur_reed == 1)
+        {
+          Serial.println("interférence Reed");
+          send_reed = 0;
+          timer_3 = 0;
+        }
+        else
+        {
+          send_reed = 1;
+        }
       }
-      else
-      {
-        send = 1;
-      }
-    }
-
-    if (send)
-    {
-      counter++;
-      Serial.println("Casserole");
-      mqttClient.publish((MQTT_TOPIC), 0, false, String(counter).c_str());
-
+      */
+      Serial.println("Send Reed close");
+      mqttClient.publish((MQTT_TOPIC_REED), 0, false, String(val_capteur_reed).c_str());
       M5.Lcd.clear(BLACK);
       M5.Lcd.setTextDatum(CC_DATUM);
       M5.Lcd.drawString("Internet : ", 0, 60, 4);
@@ -237,14 +256,79 @@ void loop()
       M5.Lcd.drawString(String(mqtt_state), 200, 90, 4);
       M5.Lcd.drawString("Compteur : ", 0, 120, 4);
       M5.Lcd.drawString(String(counter), 200, 120, 4);
-
+      M5.Lcd.drawString("reed state : ", 0, 150, 4);
+      M5.Lcd.drawString(String(val_capteur_reed), 300, 150, 4);
+      send_reed = 0;
+      timer_4 = millis();
     }
-    else{
-      Serial.println("interférence");
+    if (val_capteur_reed == 1 && last_val_capteur_reed == 0)
+    {
+
+      Serial.println("Send Reed open");
+      mqttClient.publish((MQTT_TOPIC_REED), 0, false, String(val_capteur_reed).c_str());
+      M5.Lcd.clear(BLACK);
+      M5.Lcd.setTextDatum(CC_DATUM);
+      M5.Lcd.drawString("Internet : ", 0, 60, 4);
+      M5.Lcd.drawString(WiFi.localIP().toString(), 200, 60, 4);
+      M5.Lcd.drawString("MQTT : ", 0, 90, 4);
+      M5.Lcd.drawString(String(mqtt_state), 200, 90, 4);
+      M5.Lcd.drawString("Compteur : ", 0, 120, 4);
+      M5.Lcd.drawString(String(counter), 200, 120, 4);
+      M5.Lcd.drawString("reed state : ", 0, 150, 4);
+      M5.Lcd.drawString(String(val_capteur_reed), 300, 150, 4);
+      send_reed = 0;
+      timer_4 = millis();
     }
 
-    timer_2 = millis();
+    last_val_capteur_reed = val_capteur_reed;
   }
 
-  last_val_capteur = val_capteur;
+  if (is_IR)
+  {
+    val_capteur = digitalRead(22);
+    /* capteur IR */
+    if (val_capteur == 0 && last_val_capteur == 1 && timer_1 - timer_2 > 1000)
+    {
+      timer_3 = millis();
+      while (millis() - timer_3 < 200)
+      {
+        val_capteur = digitalRead(22);
+        if (val_capteur == 1)
+        {
+          Serial.println("interférence");
+          send = 0;
+          timer_2 = 0;
+        }
+        else
+        {
+          send = 1;
+        }
+      }
+
+      if (send)
+      {
+        counter++;
+        Serial.println("IR");
+        mqttClient.publish((MQTT_TOPIC), 0, false, String(counter).c_str());
+        M5.Lcd.clear(BLACK);
+        M5.Lcd.setTextDatum(CC_DATUM);
+        M5.Lcd.drawString("Internet : ", 0, 60, 4);
+        M5.Lcd.drawString(WiFi.localIP().toString(), 200, 60, 4);
+        M5.Lcd.drawString("MQTT : ", 0, 90, 4);
+        M5.Lcd.drawString(String(mqtt_state), 200, 90, 4);
+        M5.Lcd.drawString("Compteur : ", 0, 120, 4);
+        M5.Lcd.drawString(String(counter), 200, 120, 4);
+        M5.Lcd.drawString("Compteur reed : ", 0, 150, 4);
+        M5.Lcd.drawString(String(val_capteur_reed), 300, 150, 4);
+        send = 0;
+      }
+      else
+      {
+        Serial.println("interférence");
+      }
+      timer_2 = millis();
+    }
+
+    last_val_capteur = val_capteur;
+  }
 }
