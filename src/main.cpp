@@ -22,6 +22,18 @@ long timer_4 = 0;
 bool internet_state = 0;
 bool mqtt_state = 0;
 
+bool is_current = 1;
+float val_capteur_current = 0.0;
+float last_val_capteur_current = 0.0;
+const int ACPin = 36; // set arduino signal read pin
+String machine_state = "NaN";
+
+#define ACTectionRange 20; // set Non-invasive AC Current Sensor tection range (5A,10A,20A)
+// VREF: Analog reference
+// For Arduino UNO, Leonardo and mega2560, etc. change VREF to 5
+// For Arduino Zero, Due, MKR Family, ESP32, etc. 3V3 controllers, change VREF to 3.3
+#define VREF 5.0
+
 extern "C"
 {
 #include "freertos/FreeRTOS.h"
@@ -40,11 +52,33 @@ const char *mqtt_server = "mqtt.ci-ciad.utbm.fr";
 // a MODIFIER
 #define MQTT_TOPIC "M5Stack5/IR/state"
 #define MQTT_TOPIC_REED "M5Stack5/Reed/state"
+#define MQTT_TOPIC_CURRENT "M5Stack5/Current/state"
 
 AsyncMqttClient mqttClient;
 TimerHandle_t mqttReconnectTimer;
 TimerHandle_t wifiReconnectTimer;
 int status = WL_IDLE_STATUS;
+
+float readACCurrentValue()
+{
+  float ACCurrtntValue = 0;
+  float peakVoltage = 0;
+  float voltageVirtualValue = 0; // Vrms
+  for (int i = 0; i < 5; i++)
+  {
+    peakVoltage += analogRead(ACPin); // read peak voltage
+    delay(1);
+  }
+  peakVoltage = peakVoltage / 5;
+  voltageVirtualValue = peakVoltage * 0.707; // change the peak voltage to the Virtual Value of voltage
+
+  /*The circuit is amplified by 2 times, so it is divided by 2.*/
+  voltageVirtualValue = (voltageVirtualValue / 1024 * VREF) / 2;
+
+  ACCurrtntValue = voltageVirtualValue * ACTectionRange;
+
+  return ACCurrtntValue;
+}
 
 void connectToWifi()
 {
@@ -100,7 +134,9 @@ void onMqttConnect(bool sessionPresent)
   M5.Lcd.drawString("Compteur : ", 0, 120, 4);
   M5.Lcd.drawString(String(counter), 200, 120, 4);
   M5.Lcd.drawString("reed state : ", 0, 150, 4);
-  M5.Lcd.drawString(String(val_capteur_reed), 300, 150, 4);
+  M5.Lcd.drawString(String(val_capteur_reed), 200, 150, 4);
+  M5.Lcd.drawString("machine state : ", 0, 180, 4);
+  M5.Lcd.drawString(machine_state, 200, 180, 4);
 }
 
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
@@ -116,7 +152,9 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
   M5.Lcd.drawString("Compteur : ", 0, 120, 4);
   M5.Lcd.drawString(String(counter), 200, 120, 4);
   M5.Lcd.drawString("reed state : ", 0, 150, 4);
-  M5.Lcd.drawString(String(val_capteur_reed), 300, 150, 4);
+  M5.Lcd.drawString(String(val_capteur_reed), 200, 150, 4);
+  M5.Lcd.drawString("machine state : ", 0, 180, 4);
+  M5.Lcd.drawString(machine_state, 200, 180, 4);
 
   if (WiFi.isConnected())
   {
@@ -216,12 +254,55 @@ void setup()
   M5.Lcd.drawString("Compteur : ", 0, 120, 4);
   M5.Lcd.drawString(String(counter), 200, 120, 4);
   M5.Lcd.drawString("reed state : ", 0, 150, 4);
-  M5.Lcd.drawString(String(val_capteur_reed), 300, 150, 4);
+  M5.Lcd.drawString(String(val_capteur_reed), 200, 150, 4);
+  M5.Lcd.drawString("machine state : ", 0, 180, 4);
+  M5.Lcd.drawString(machine_state, 200, 180, 4);
 }
 
 void loop()
 {
   timer_1 = millis();
+  if (is_current)
+  {
+    val_capteur_current = readACCurrentValue(); // read AC Current Value
+    if (val_capteur_current > 1 && last_val_capteur_current < 1)
+    {
+      machine_state = "ON";
+      Serial.println("MACHINE ON");
+      mqttClient.publish((MQTT_TOPIC_CURRENT), 0, false, machine_state.c_str());
+      M5.Lcd.clear(BLACK);
+      M5.Lcd.setTextDatum(CC_DATUM);
+      M5.Lcd.drawString("Internet : ", 0, 60, 4);
+      M5.Lcd.drawString(WiFi.localIP().toString(), 200, 60, 4);
+      M5.Lcd.drawString("MQTT : ", 0, 90, 4);
+      M5.Lcd.drawString(String(mqtt_state), 200, 90, 4);
+      M5.Lcd.drawString("Compteur : ", 0, 120, 4);
+      M5.Lcd.drawString(String(counter), 200, 120, 4);
+      M5.Lcd.drawString("reed state : ", 0, 150, 4);
+      M5.Lcd.drawString(String(val_capteur_reed), 200, 150, 4);
+      M5.Lcd.drawString("machine state : ", 0, 180, 4);
+      M5.Lcd.drawString(machine_state, 200, 180, 4);
+    }
+    if (val_capteur_current < 1 && last_val_capteur_current > 1)
+    {
+      machine_state = "OFF";
+      Serial.println("MACHINE OFF");
+      mqttClient.publish((MQTT_TOPIC_CURRENT), 0, false, machine_state.c_str());
+      M5.Lcd.clear(BLACK);
+      M5.Lcd.setTextDatum(CC_DATUM);
+      M5.Lcd.drawString("Internet : ", 0, 60, 4);
+      M5.Lcd.drawString(WiFi.localIP().toString(), 200, 60, 4);
+      M5.Lcd.drawString("MQTT : ", 0, 90, 4);
+      M5.Lcd.drawString(String(mqtt_state), 200, 90, 4);
+      M5.Lcd.drawString("Compteur : ", 0, 120, 4);
+      M5.Lcd.drawString(String(counter), 200, 120, 4);
+      M5.Lcd.drawString("reed state : ", 0, 150, 4);
+      M5.Lcd.drawString(String(val_capteur_reed), 200, 150, 4);
+      M5.Lcd.drawString("machine state : ", 0, 180, 4);
+      M5.Lcd.drawString(machine_state, 200, 180, 4);
+    }
+    last_val_capteur_current = val_capteur_current;
+  }
 
   if (is_reed)
   {
@@ -258,8 +339,6 @@ void loop()
       M5.Lcd.drawString(String(counter), 200, 120, 4);
       M5.Lcd.drawString("reed state : ", 0, 150, 4);
       M5.Lcd.drawString(String(val_capteur_reed), 300, 150, 4);
-      send_reed = 0;
-      timer_4 = millis();
     }
     if (val_capteur_reed == 1 && last_val_capteur_reed == 0)
     {
@@ -276,8 +355,6 @@ void loop()
       M5.Lcd.drawString(String(counter), 200, 120, 4);
       M5.Lcd.drawString("reed state : ", 0, 150, 4);
       M5.Lcd.drawString(String(val_capteur_reed), 300, 150, 4);
-      send_reed = 0;
-      timer_4 = millis();
     }
 
     last_val_capteur_reed = val_capteur_reed;
